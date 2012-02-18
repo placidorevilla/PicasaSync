@@ -57,9 +57,13 @@ def upload_photo(client, album, photo):
 def sync(args):
 	config = googlecl.config.load_configuration()
 	picasa_client = get_picasa_client(config, args.debug)
+	if not picasa_client:
+		return
+
 	albums = get_disk_albums(args.path, args.max_photos)
 	if len(albums) == 0:
 		return
+	
 	picasa_albums = picasa_client.build_entry_list(titles = [None], force_photos = False)
 	picasa_albums = dict([(googlecl.safe_decode(a.title.text), a) for a in picasa_albums])
 	for album, photos in albums.iteritems():
