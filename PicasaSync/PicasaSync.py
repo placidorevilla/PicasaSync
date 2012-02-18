@@ -20,6 +20,8 @@ try:
 except ImportError:
 	raise SystemExit('Error importing the iso8601 module. In debian/ubuntu you can install it by doing "sudo apt-get install python-iso8601"')
 
+MAX_PHOTOS_PER_ALBUM = 1000
+
 LOG = logging.getLogger("PicasaSync")
 
 supported_types = set(['image/jpeg', 'image/tiff', 'image/x-ms-bmp', 'image/gif', 'image/x-photoshop', 'image/png'])
@@ -125,7 +127,7 @@ def run():
 	parser.add_argument('-n', '--dry-run', dest = 'dry_run', action = 'store_true', help = 'Do everything except creating or deleting albums and photos')
 	parser.add_argument('-D', '--debug', dest = 'debug', action = 'store_true', help = 'Debug Picasa API usage')
 	parser.add_argument('-v', '--verbose', dest = 'verbose', action = 'count', help = 'Verbose output (can be given more than once)')
-	parser.add_argument('-m', '--max-photos', metavar = 'NUMBER', dest = 'max_photos', type = int, default = 1000, help = 'Maximum number of photos in album (limited to 1000)')
+	parser.add_argument('-m', '--max-photos', metavar = 'NUMBER', dest = 'max_photos', type = int, default = MAX_PHOTOS_PER_ALBUM, help = 'Maximum number of photos in album (limited to %s)' % MAX_PHOTOS_PER_ALBUM)
 	parser.add_argument('-u', '--upload', dest = 'upload', action = 'store_true', help = 'Upload missing remote photos')
 	parser.add_argument('-d', '--download', dest = 'download', action = 'store_true', help = 'Download missing local photos')
 	parser.add_argument('-r', '--replace', dest = 'replace', action = 'store_true', help = 'Replace changed local or remote photos')
@@ -143,9 +145,9 @@ def run():
 
 	logging.basicConfig(level = log_level)
 
-	if options.max_photos > 1000:
-		LOG.warn('Maximum number of photos in album is bigger than the Picasa limit (1000), using 1000 as limit')
-		options.max_photos = 1000
+	if options.max_photos > MAX_PHOTOS_PER_ALBUM:
+		LOG.warn('Maximum number of photos in album is bigger than the Picasa limit (%s), using this number as limit' % MAX_PHOTOS_PER_ALBUM)
+		options.max_photos = MAX_PHOTOS_PER_ALBUM
 
 	if not options.upload and not options.download:
 		LOG.info('No upload or download specified. Using bidirectional sync.')
