@@ -40,9 +40,10 @@ def get_disk_albums(path, max_photos):
 				albums[(album + ' (%s)' % (i + 1), album)] = supported_files[i * max_photos:i * max_photos + max_photos]
 	return albums
 
-def get_picasa_client(config, debug = False):
+def get_picasa_client(options = None):
+	config = googlecl.config.load_configuration()
 	client = picasa_service.SERVICE_CLASS(config)
-	client.debug = debug
+	client.debug = False if not options else options.debug
 	client.email = config.lazy_get(picasa.SECTION_HEADER, 'user')
 	auth_manager = googlecl.authentication.AuthenticationManager('picasa', client)
 	set_token = auth_manager.set_access_token()
@@ -51,16 +52,52 @@ def get_picasa_client(config, debug = False):
 		return None
 	return client
 
-def upload_photo(client, album, photo):
-	client.insert_media_list(album, [googlecl.safe_decode(photo)])
+def upload_photo(client, album, f, options = None, reason = None):
+	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
+		msg = 'Uploading file "%s"%s' % (f, (' ' + reason) if reason else '')
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
 
-def sync(args):
-	config = googlecl.config.load_configuration()
-	picasa_client = get_picasa_client(config, args.debug)
+	if not options or not options.dry_run:
+		client.insert_media_list(album, [googlecl.safe_decode(f)])
+
+def delete_remote_photo(client, photo, options = None, reason = None):
+	if reason and ((options and options.dry_run) or LOG.isEnabledFor(logging.INFO)):
+		msg = 'Deleting remote photo "%s" %s' % (photo.title.text, reason)
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
+
+	if not options or not options.dry_run:
+		client.Delete(photo)
+
+def replace_remote_photo(client, album, photo, f, options = None, reason = None):
+	delete_remote_photo(client, photo, options)
+	upload_photo(client, album, f, options, reason)
+
+def create_album(client, title, options = None, reason = None):
+	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
+		msg = 'Uploading album "%s"%s' % (title, (' ' + reason) if reason else '')
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
+
+	if not options or not options.dry_run:
+		return client.CreateAlbum(title = title, summary = None, access = client.config.lazy_get(picasa.SECTION_HEADER, 'access'), date = None)
+	else:
+		return None
+	pass
+
+def sync(options, path):
+	picasa_client = get_picasa_client(options)
 	if not picasa_client:
 		return
 
-	albums = get_disk_albums(args.path, args.max_photos)
+	albums = get_disk_albums(path, options.max_photos)
 	if len(albums) == 0:
 		return
 	
@@ -70,49 +107,57 @@ def sync(args):
 		album_path = album[1]
 		album = album[0]
 		if not album in picasa_albums:
-			LOG.info('Uploading album "%s" not found in Picasa' % album)
-			if not args.dry_run:
-				new_album = picasa_client.CreateAlbum(title = album, summary = None, access = config.lazy_get(picasa.SECTION_HEADER, 'access'), date = None)
-				for photo, f, ts in photos:
-					upload_photo(picasa_client, new_album, f)
+			new_album = create_album(picasa_client, album, options, 'because it does not exist in Picasa')
+			for photo, f, ts in photos:
+				upload_photo(picasa_client, new_album, f, options)
 		else:
 			LOG.debug('Checking album "%s"...' % album)
 			picasa_photos = picasa_client.GetEntries('/data/feed/api/user/default/albumid/%s?kind=photo' % picasa_albums[album].gphoto_id.text)
 			picasa_photos = dict([(googlecl.safe_decode(p.title.text), p) for p in picasa_photos])
 			for photo, f, ts in photos:
 				if not photo in picasa_photos:
-					LOG.info('Uploading "%s" because it is not in the album "%s"' % (photo, album))
-					if not args.dry_run:
-						upload_photo(picasa_client, picasa_albums[album], f)
-				elif ts > calendar.timegm(iso8601.parse_date(picasa_photos[photo].updated.text).timetuple()):
-					LOG.info('Uploading "%s" because it is newer than the one in the album "%s"' % (photo, album))
-					if not args.dry_run:
-						picasa_client.Delete(picasa_photos[photo])
-						upload_photo(picasa_client, picasa_albums[album], f)
+					upload_photo(picasa_client, picasa_albums[album], f, options, 'because it is not in the album "%s"' % album)
+				elif options.replace and ts > calendar.timegm(iso8601.parse_date(picasa_photos[photo].updated.text).timetuple()):
+					replace_remote_photo(picasa_client, picasa_albums[album], picasa_photos[photo], f, options, 'because it is newer than the one in the album "%s"' % album)
 
 def run():
 	parser = argparse.ArgumentParser(description = 'Sync a directory with your Picasa Web account')
-	parser.add_argument('-n', '--dry-run', dest = 'dry_run', action = 'store_true', help = 'Do everything except creating albums and photos')
-	parser.add_argument('-d', '--debug', dest = 'debug', action = 'store_true', help = 'Debug Picasa API usage')
+	parser.add_argument('-n', '--dry-run', dest = 'dry_run', action = 'store_true', help = 'Do everything except creating or deleting albums and photos')
+	parser.add_argument('-D', '--debug', dest = 'debug', action = 'store_true', help = 'Debug Picasa API usage')
 	parser.add_argument('-v', '--verbose', dest = 'verbose', action = 'count', help = 'Verbose output (can be given more than once)')
 	parser.add_argument('-m', '--max-photos', metavar = 'NUMBER', dest = 'max_photos', type = int, default = 1000, help = 'Maximum number of photos in album (limited to 1000)')
+	parser.add_argument('-u', '--upload', dest = 'upload', action = 'store_true', help = 'Upload missing remote photos')
+	parser.add_argument('-d', '--download', dest = 'download', action = 'store_true', help = 'Download missing local photos')
+	parser.add_argument('-r', '--replace', dest = 'replace', action = 'store_true', help = 'Replace changed local or remote photos')
+	parser.add_argument('--delete-photos', dest = 'delete_photos', action = 'store_true', help = '(DANGEROUS) Delete remote or local photos not present on the other album')
+	parser.add_argument('--delete-albums', dest = 'delete_albums', action = 'store_true', help = '(VERY DANGEROUS) Delete remote or local albums not present on the other system')
 	parser.add_argument('path', metavar = 'PATH', help = 'Parent directory of the albums to sync')
-	args = parser.parse_args()
+	options = parser.parse_args()
 
-	if args.verbose == 1:
+	if options.verbose == 1:
 		log_level = logging.INFO
-	elif args.verbose >= 2:
+	elif options.verbose >= 2:
 		log_level = logging.DEBUG
 	else:
 		log_level = logging.WARNING
 
 	logging.basicConfig(level = log_level)
 
-	if args.max_photos > 1000:
+	if options.max_photos > 1000:
 		LOG.warn('Maximum number of photos in album is bigger than the Picasa limit (1000), using 1000 as limit')
-		args.max_photos = 1000
+		options.max_photos = 1000
 
-	sync(args)
+	if not options.upload and not options.download:
+		LOG.info('No upload or download specified. Using bidirectional sync.')
+		options.upload = True
+		options.download = True
+
+	if (options.delete_photos or options.delete_albums) and options.upload and options.download:
+		LOG.warn('You cannot delete when using bidirectional syncing. Disabling deletion.')
+		options.delete_photos = False
+		options.delete_albums = False
+
+	sync(options, options.path)
 
 def main():
 	try:
