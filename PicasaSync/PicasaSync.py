@@ -47,7 +47,7 @@ def get_picasa_client(config, debug = False):
 	auth_manager = googlecl.authentication.AuthenticationManager('picasa', client)
 	set_token = auth_manager.set_access_token()
 	if not set_token:
-		LOG.error("Error using OAuth token. You have to authenticate with googlecl.")
+		LOG.error('Error using OAuth token. You have to authenticate with googlecl using "google picasa list-albums --force-auth" and following the instructions')
 		return None
 	return client
 
