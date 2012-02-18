@@ -91,16 +91,16 @@ def get_picasa_client(options = None):
 		return None
 	return client
 
-def upload_photo(client, album, f, options = None, reason = None):
+def upload_photo(client, album, filename, options = None, reason = None):
 	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
-		msg = 'Uploading file "%s"%s' % (f, (' ' + reason) if reason else '')
+		msg = 'Uploading file "%s"%s' % (filename, (' ' + reason) if reason else '')
 		if options and options.dry_run:
 			LOG.warn('[DRYRUN] %s' % msg)
 		else:
 			LOG.info(msg)
 
 	if not options or not options.dry_run:
-		client.insert_media_list(album, [googlecl.safe_decode(f)])
+		client.insert_media_list(album, [googlecl.safe_decode(filename)])
 
 def delete_remote_photo(client, photo, options = None, reason = None):
 	if reason and ((options and options.dry_run) or LOG.isEnabledFor(logging.INFO)):
@@ -113,9 +113,9 @@ def delete_remote_photo(client, photo, options = None, reason = None):
 	if not options or not options.dry_run:
 		client.Delete(photo)
 
-def replace_remote_photo(client, album, photo, f, options = None, reason = None):
+def replace_remote_photo(client, album, photo, filename, options = None, reason = None):
 	delete_remote_photo(client, photo, options)
-	upload_photo(client, album, f, options, reason)
+	upload_photo(client, album, filename, options, reason)
 
 def create_album(client, title, options = None, reason = None):
 	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
@@ -142,16 +142,16 @@ def sync(options, path):
 	for album, photos in disk_albums.iteritems():
 		if not album in picasa_albums:
 			new_album = create_album(client, album, options, 'because it does not exist in Picasa')
-			for photo, f, ts in photos:
-				upload_photo(client, new_album, f, options)
+			for photo, filename, timestamp in photos:
+				upload_photo(client, new_album, filename, options)
 		else:
 			LOG.debug('Checking album "%s"...' % album)
 			picasa_photos = get_picasa_photos(client, picasa_albums[album])
-			for photo, f, ts in photos:
+			for photo, filename, timestamp in photos:
 				if not photo in picasa_photos:
-					upload_photo(client, picasa_albums[album], f, options, 'because it is not in the album "%s"' % album)
-				elif options.replace and ts > calendar.timegm(iso8601.parse_date(picasa_photos[photo].updated.text).timetuple()):
-					replace_remote_photo(client, picasa_albums[album], picasa_photos[photo], f, options, 'because it is newer than the one in the album "%s"' % album)
+					upload_photo(client, picasa_albums[album], filename, options, 'because it is not in the album "%s"' % album)
+				elif options.replace and timestamp > calendar.timegm(iso8601.parse_date(picasa_photos[photo].updated.text).timetuple()):
+					replace_remote_photo(client, picasa_albums[album], picasa_photos[photo], filename, options, 'because it is newer than the one in the album "%s"' % album)
 
 def run():
 	parser = argparse.ArgumentParser(description = 'Sync a directory with your Picasa Web account')
