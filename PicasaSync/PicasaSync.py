@@ -26,7 +26,17 @@ LOG = logging.getLogger("PicasaSync")
 
 supported_types = set(['image/jpeg', 'image/tiff', 'image/x-ms-bmp', 'image/gif', 'image/x-photoshop', 'image/png'])
 
-def get_disk_albums(path, max_photos):
+def get_disk_albums(path, max_photos = None):
+	"""Returns a dictionary with all the local albums in the given path
+
+	Args:
+		path: directory containing all the local albums
+		max_photos: if not None, splice all albums with more than max_photos photos in several albums
+
+	Returns:
+		A dictionary of the form:
+		{ u'Album title': [(u'Photo title', 'photo_path', last_modification_timestamp), ...] }
+	"""
 	albums = {}
 	for root, dirs, files in os.walk(path):
 		supported_files = sorted([f for f in files if mimetypes.guess_type(f)[0] in supported_types])
@@ -34,13 +44,40 @@ def get_disk_albums(path, max_photos):
 			continue
 		supported_files = [(googlecl.safe_decode(f), os.path.join(root, f), os.stat(os.path.join(root,f)).st_mtime) for f in supported_files]
 		album = googlecl.safe_decode(os.path.relpath(root, path))
-		if len(supported_files) < max_photos:
-			albums[(album, album)] = supported_files
+		if not max_photos or (len(supported_files) < max_photos):
+			albums[album] = supported_files
 		else:
 			for i in xrange(0, (len(supported_files) + max_photos - 1) / max_photos):
 				LOG.debug('Splicing album "%s (%s)" with photos from "%s" to "%s"' % (album, i + 1, supported_files[i * max_photos][0], supported_files[min(i * max_photos + max_photos - 1, len(supported_files) - 1)][0]))
-				albums[(album + ' (%s)' % (i + 1), album)] = supported_files[i * max_photos:i * max_photos + max_photos]
+				albums[album + ' (%s)' % (i + 1)] = supported_files[i * max_photos:i * max_photos + max_photos]
 	return albums
+
+def get_picasa_albums(client):
+	"""Returns a dictionary with all the albums in your Picasa account.
+
+	Args:
+		client: a googlecl.picasa.service.PhotosServiceCL object
+
+	Returns:
+		A dictionary of the form:
+		{ u'Album title': gdata.photos.AlbumEntry }
+	"""
+	picasa_albums = client.build_entry_list(titles = [None], force_photos = False)
+	return dict([(googlecl.safe_decode(a.title.text), a) for a in picasa_albums])
+
+def get_picasa_photos(client, album):
+	"""Returns a dictionary with all the photos in a given album.
+
+	Args:
+		client: a googlecl.picasa.service.PhotosServiceCL object
+		album: a gdata.photos.AlbumEntry of the album
+
+	Returns:
+		A dictionary of the form:
+		{ u'Photo title': gdata.photos.PhotoEntry }
+	"""
+	picasa_photos = client.GetEntries('/data/feed/api/user/default/albumid/%s?kind=photo' % album.gphoto_id.text)
+	return dict([(googlecl.safe_decode(p.title.text), p) for p in picasa_photos])
 
 def get_picasa_client(options = None):
 	config = googlecl.config.load_configuration()
@@ -95,32 +132,26 @@ def create_album(client, title, options = None, reason = None):
 	pass
 
 def sync(options, path):
-	picasa_client = get_picasa_client(options)
-	if not picasa_client:
+	client = get_picasa_client(options)
+	if not client:
 		return
 
-	albums = get_disk_albums(path, options.max_photos)
-	if len(albums) == 0:
-		return
+	disk_albums = get_disk_albums(path, options.max_photos)
+	picasa_albums = get_picasa_albums(client)
 	
-	picasa_albums = picasa_client.build_entry_list(titles = [None], force_photos = False)
-	picasa_albums = dict([(googlecl.safe_decode(a.title.text), a) for a in picasa_albums])
-	for album, photos in albums.iteritems():
-		album_path = album[1]
-		album = album[0]
+	for album, photos in disk_albums.iteritems():
 		if not album in picasa_albums:
-			new_album = create_album(picasa_client, album, options, 'because it does not exist in Picasa')
+			new_album = create_album(client, album, options, 'because it does not exist in Picasa')
 			for photo, f, ts in photos:
-				upload_photo(picasa_client, new_album, f, options)
+				upload_photo(client, new_album, f, options)
 		else:
 			LOG.debug('Checking album "%s"...' % album)
-			picasa_photos = picasa_client.GetEntries('/data/feed/api/user/default/albumid/%s?kind=photo' % picasa_albums[album].gphoto_id.text)
-			picasa_photos = dict([(googlecl.safe_decode(p.title.text), p) for p in picasa_photos])
+			picasa_photos = get_picasa_photos(client, picasa_albums[album])
 			for photo, f, ts in photos:
 				if not photo in picasa_photos:
-					upload_photo(picasa_client, picasa_albums[album], f, options, 'because it is not in the album "%s"' % album)
+					upload_photo(client, picasa_albums[album], f, options, 'because it is not in the album "%s"' % album)
 				elif options.replace and ts > calendar.timegm(iso8601.parse_date(picasa_photos[photo].updated.text).timetuple()):
-					replace_remote_photo(picasa_client, picasa_albums[album], picasa_photos[photo], f, options, 'because it is newer than the one in the album "%s"' % album)
+					replace_remote_photo(client, picasa_albums[album], picasa_photos[photo], f, options, 'because it is newer than the one in the album "%s"' % album)
 
 def run():
 	parser = argparse.ArgumentParser(description = 'Sync a directory with your Picasa Web account')
