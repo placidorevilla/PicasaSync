@@ -86,7 +86,7 @@ def sync(args):
 						picasa_client.Delete(picasa_photos[photo])
 						upload_photo(picasa_client, picasa_albums[album], f)
 
-def main():
+def run():
 	parser = argparse.ArgumentParser(description = 'Sync a directory with your Picasa Web account')
 	parser.add_argument('-n', '--dry-run', dest = 'dry_run', action = 'store_true', help = 'Do everything except creating albums and photos')
 	parser.add_argument('-d', '--debug', dest = 'debug', action = 'store_true', help = 'Debug Picasa API usage')
@@ -110,8 +110,12 @@ def main():
 
 	sync(args)
 
-if __name__ == '__main__':
+def main():
 	try:
-		main()
+		run()
 	except KeyboardInterrupt:
 		pass
+
+if __name__ == '__main__':
+		main()
+
