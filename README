@@ -4,17 +4,39 @@ sudo python ./setup.py install
 
 -------------------------------
 
-usage: PicasaSync.py [-h] [-n] [-d] [-v] [-m NUMBER] PATH
+usage: picasasync [-h] [-n] [-D] [-v] [-m NUMBER] [-u] [-d] [-r]
+                  [--force-update] [--delete-photos] [--delete-albums]
+                  PATH [PATH ...]
 
-Sync a directory with your Picasa Web account
+Sync one or more directories with your Picasa Web account. If only one
+directory is given and it doesn't contain any supported file, it is assumed to
+be the parent of all the local albums.
 
 positional arguments:
   PATH                  Parent directory of the albums to sync
 
 optional arguments:
   -h, --help            show this help message and exit
-  -n, --dry-run         Do everything except creating albums and photos
-  -d, --debug           Debug Picasa API usage
+  -n, --dry-run         Do everything except creating or deleting albums and
+                        photos
+  -D, --debug           Debug Picasa API usage
   -v, --verbose         Verbose output (can be given more than once)
   -m NUMBER, --max-photos NUMBER
                         Maximum number of photos in album (limited to 1000)
+  -u, --upload          Upload missing remote photos
+  -d, --download        Download missing local photos
+  -r, --update          Update changed local or remote photos
+
+DANGEROUS:
+  Dangerous options that should be used with care
+
+  --force-update        Force updating photos regardless of modified status
+                        (Assumes --update)
+  --delete-photos       Delete remote or local photos not present on the other
+                        album
+
+VERY DANGEROUS:
+  Very dangerous options that should be used with extreme care
+
+  --delete-albums       Delete remote or local albums not present on the other
+                        system
