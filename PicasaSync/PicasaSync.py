@@ -27,7 +27,7 @@ supported_types = set(['image/jpeg', 'image/tiff', 'image/x-ms-bmp', 'image/gif'
 def _entry_ts(entry):
 	return int(long(entry.timestamp.text) / 1000)
 
-def get_disk_albums(path, max_photos = None):
+def get_disk_albums(paths, max_photos = None):
 	"""Returns a dictionary with all the local albums in the given path
 
 	Args:
@@ -39,18 +39,24 @@ def get_disk_albums(path, max_photos = None):
 		{ (u'Album title', 'album_dir', last_modification_timestamp): [(u'Photo title', 'photo_path', last_modification_timestamp), ...] }
 	"""
 	albums = {}
-	for root, dirs, files in os.walk(path):
-		supported_files = sorted([f for f in files if mimetypes.guess_type(f)[0] in supported_types])
-		if root == path or len(supported_files) == 0:
-			continue
-		supported_files = [(googlecl.safe_decode(f), os.path.join(root, f), int(os.stat(os.path.join(root,f)).st_mtime)) for f in supported_files]
-		album = googlecl.safe_decode(os.path.relpath(root, path))
-		if not max_photos or (len(supported_files) < max_photos):
-			albums[(album, album, int(os.stat(root).st_mtime))] = supported_files
-		else:
-			for i in xrange(0, (len(supported_files) + max_photos - 1) / max_photos):
-				LOG.debug('Splicing album "%s (%s)" with photos from "%s" to "%s"' % (album, i + 1, supported_files[i * max_photos][0], supported_files[min(i * max_photos + max_photos - 1, len(supported_files) - 1)][0]))
-				albums[(album + ' (%s)' % (i + 1), album, int(os.stat(root).st_mtime))] = supported_files[i * max_photos:i * max_photos + max_photos]
+	for path in paths:
+		for root, dirs, files in os.walk(path):
+			supported_files = sorted([f for f in files if mimetypes.guess_type(f)[0] in supported_types])
+			if len(supported_files) == 0:
+				continue
+			supported_files = [(googlecl.safe_decode(f), os.path.join(root, f), int(os.stat(os.path.join(root,f)).st_mtime)) for f in supported_files]
+			if root == path:
+				album = googlecl.safe_decode(os.path.basename(os.path.normpath(root)))
+			elif len(paths) > 1 or googlecl.safe_decode(os.path.basename(os.path.normpath(path))) in (a[1] for a in albums.iterkeys()):
+				album = googlecl.safe_decode(os.path.join(os.path.basename(os.path.normpath(path)), os.path.relpath(root, path)))
+			else:
+				album = googlecl.safe_decode(os.path.relpath(root, path))
+			if not max_photos or (len(supported_files) < max_photos):
+				albums[(album, album, int(os.stat(root).st_mtime))] = supported_files
+			else:
+				for i in xrange(0, (len(supported_files) + max_photos - 1) / max_photos):
+					LOG.debug('Splicing album "%s (%s)" with photos from "%s" to "%s"' % (album, i + 1, supported_files[i * max_photos][0], supported_files[min(i * max_photos + max_photos - 1, len(supported_files) - 1)][0]))
+					albums[(album + ' (%s)' % (i + 1), album, int(os.stat(root).st_mtime))] = supported_files[i * max_photos:i * max_photos + max_photos]
 	return albums
 
 def get_picasa_albums(client):
@@ -214,14 +220,16 @@ def delete_file(filename, options = None, reason = None):
 		except Exception as e:
 			LOG.warn('Cannot delete local file: ' + str(e))
 
-def sync(options, root):
+def sync(options, paths):
 	client = get_picasa_client(options)
 	if not client:
 		return
 
-	disk_albums = get_disk_albums(root, options.max_photos)
+	disk_albums = get_disk_albums(paths, options.max_photos)
 	picasa_albums = get_picasa_albums(client)
-	
+
+	root = paths[0]
+
 	for (album_title, album_dir, album_ts), photos in disk_albums.iteritems():
 		# Local albums not in remote
 		if not album_title in picasa_albums:
@@ -264,6 +272,8 @@ def sync(options, root):
 			delete_album(client, album, options, ' because it does not exist locally')
 		if options.download:
 			album_path = create_dir(root, album_title, _entry_ts(album), options, ' because it does not exist on the local albums')
+			if album_path == None:
+				continue
 			picasa_photos = get_picasa_photos(client, album)
 			for photo_title, photo in picasa_photos.iteritems():
 				download_photo(album_path, photo, options, ' because it does not exist on the local album "%s"' % album_title)
@@ -319,9 +329,6 @@ def run():
 		LOG.warn('You cannot download or delete albums when using more than one directories. Disabling download and/or album deletion.')
 		options.download = False
 		options.delete_albums = False
-
-	if len(options.path) == 1:
-		options.path = options.path[0]
 
 	sync(options, options.path)
 
