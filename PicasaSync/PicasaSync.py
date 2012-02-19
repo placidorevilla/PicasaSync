@@ -4,7 +4,7 @@ import sys
 if sys.hexversion < 0x020700F0:
 	raise SystemExit('This scripts needs at least Python 2.7')
 
-import logging, os, mimetypes, argparse
+import logging, os, mimetypes, argparse, urllib
 
 try:
 	import googlecl
@@ -24,6 +24,9 @@ LOG = logging.getLogger("PicasaSync")
 
 supported_types = set(['image/jpeg', 'image/tiff', 'image/x-ms-bmp', 'image/gif', 'image/x-photoshop', 'image/png'])
 
+def _entry_ts(entry):
+	return int(long(entry.timestamp.text) / 1000)
+
 def get_disk_albums(path, max_photos = None):
 	"""Returns a dictionary with all the local albums in the given path
 
@@ -33,7 +36,7 @@ def get_disk_albums(path, max_photos = None):
 
 	Returns:
 		A dictionary of the form:
-		{ (u'Album title', last_modification_timestamp): [(u'Photo title', 'photo_path', last_modification_timestamp), ...] }
+		{ (u'Album title', 'album_dir', last_modification_timestamp): [(u'Photo title', 'photo_path', last_modification_timestamp), ...] }
 	"""
 	albums = {}
 	for root, dirs, files in os.walk(path):
@@ -43,11 +46,11 @@ def get_disk_albums(path, max_photos = None):
 		supported_files = [(googlecl.safe_decode(f), os.path.join(root, f), int(os.stat(os.path.join(root,f)).st_mtime)) for f in supported_files]
 		album = googlecl.safe_decode(os.path.relpath(root, path))
 		if not max_photos or (len(supported_files) < max_photos):
-			albums[(album, int(os.stat(root).st_mtime))] = supported_files
+			albums[(album, album, int(os.stat(root).st_mtime))] = supported_files
 		else:
 			for i in xrange(0, (len(supported_files) + max_photos - 1) / max_photos):
 				LOG.debug('Splicing album "%s (%s)" with photos from "%s" to "%s"' % (album, i + 1, supported_files[i * max_photos][0], supported_files[min(i * max_photos + max_photos - 1, len(supported_files) - 1)][0]))
-				albums[(album + ' (%s)' % (i + 1), int(os.stat(root).st_mtime))] = supported_files[i * max_photos:i * max_photos + max_photos]
+				albums[(album + ' (%s)' % (i + 1), album, int(os.stat(root).st_mtime))] = supported_files[i * max_photos:i * max_photos + max_photos]
 	return albums
 
 def get_picasa_albums(client):
@@ -103,6 +106,23 @@ def upload_photo(client, album, photo_title, filename, timestamp, options = None
 		metadata.timestamp = gdata.photos.Timestamp(text = str(long(timestamp) * 1000))
 		client.InsertPhoto(album, metadata, filename, mimetypes.guess_type(filename)[0])
 
+def download_photo(album_path, photo, options = None, reason = None):
+	filename = os.path.join(album_path, photo.title.text)
+
+	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
+		msg = 'Downloading file "%s"%s' % (filename, reason if reason else '')
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
+
+	if not options or not options.dry_run:
+		tmpfilename = filename + '.part'
+		urllib.urlretrieve(photo.content.src, tmpfilename)
+		timestamp = _entry_ts(photo)
+		os.utime(tmpfilename, (timestamp, timestamp))
+		os.rename(tmpfilename, filename)
+
 def delete_photo(client, photo, options = None, reason = None):
 	if reason and ((options and options.dry_run) or LOG.isEnabledFor(logging.INFO)):
 		msg = 'Deleting remote photo "%s"%s' % (photo.title.text, reason)
@@ -128,7 +148,7 @@ def create_album(client, title, timestamp = None, options = None, reason = None)
 
 	if not options or not options.dry_run:
 		access = googlecl.picasa._map_access_string(client.config.lazy_get(picasa.SECTION_HEADER, 'access'))
-		return client.InsertAlbum(title = title, summary = None, access = access, timestamp = str(timestamp))
+		return client.InsertAlbum(title = title, summary = None, access = access, timestamp = str(timestamp * 1000))
 	else:
 		return None
 
@@ -143,41 +163,113 @@ def delete_album(client, album, options = None, reason = None):
 	if not options or not options.dry_run:
 		client.Delete(album)
 
-def sync(options, path):
+def create_dir(root, title, timestamp, options = None, reason = None):
+	path = os.path.join(root, title)
+
+	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
+		msg = 'Creating directory "%s"%s' % (path, reason if reason else '')
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
+
+	if not options or not options.dry_run:
+		try:
+			if not os.path.isdir(path):
+				os.makedirs(path)
+			os.utime(path, (timestamp, timestamp))
+		except Exception as e:
+			LOG.warn('Cannot create local directory: ' + str(e))
+			return None
+
+	return path
+
+def delete_dir(root, title, options = None, reason = None):
+	path = os.path.join(root, title)
+
+	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
+		msg = 'Deleting directory "%s"%s' % (path, reason if reason else '')
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
+
+	if not options or not options.dry_run:
+		try:
+			os.rmdir(path)
+		except Exception as e:
+			LOG.warn('Cannot delete local directory: ' + str(e))
+
+def delete_file(filename, options = None, reason = None):
+	if (options and options.dry_run) or LOG.isEnabledFor(logging.INFO):
+		msg = 'Deleting file "%s"%s' % (filename, reason if reason else '')
+		if options and options.dry_run:
+			LOG.warn('[DRYRUN] %s' % msg)
+		else:
+			LOG.info(msg)
+
+	if not options or not options.dry_run:
+		try:
+			os.remove(filename)
+		except Exception as e:
+			LOG.warn('Cannot delete local file: ' + str(e))
+
+def sync(options, root):
 	client = get_picasa_client(options)
 	if not client:
 		return
 
-	disk_albums = get_disk_albums(path, options.max_photos)
+	disk_albums = get_disk_albums(root, options.max_photos)
 	picasa_albums = get_picasa_albums(client)
 	
-	for (album_title, album_ts), photos in disk_albums.iteritems():
+	for (album_title, album_dir, album_ts), photos in disk_albums.iteritems():
+		# Local albums not in remote
 		if not album_title in picasa_albums:
 			if options.upload:
 				new_album = create_album(client, album_title, album_ts, options, ' because it does not exist in Picasa')
 				for photo_title, filename, timestamp in photos:
 					upload_photo(client, new_album, photo_title, filename, timestamp, options)
+			if options.download and options.delete_albums:
+				for photo_title, filename, timestamp in photos:
+					delete_file(filename, options)
+				delete_dir(root, album_dir, options, ' because it does not exist in Picasa')
+		# Common albums
 		else:
 			LOG.debug('Checking album "%s"...' % album_title)
 			picasa_photos = get_picasa_photos(client, picasa_albums[album_title])
 			for photo_title, filename, timestamp in photos:
+				# Local photo not in remote
 				if not photo_title in picasa_photos:
-					upload_photo(client, picasa_albums[album_title], photo_title, filename, timestamp, options, ' because it is not in the album "%s"' % album_title)
-				elif options.update and timestamp > long(picasa_photos[photo_title].timestamp.text) / 1000:
-					replace_photo(client, picasa_albums[album_title], picasa_photos[photo_title], filename, timestamp, options, ' because it is newer than the one in the album "%s"' % album_title)
-				elif options.force_update:
-					replace_photo(client, picasa_albums[album_title], picasa_photos[photo_title], filename, timestamp, options, ' because you have forced it')
+					if options.upload:
+						upload_photo(client, picasa_albums[album_title], photo_title, filename, timestamp, options, ' because it is not in the album "%s"' % album_title)
+					if options.download and options.delete_photos:
+						delete_file(filename, options, ' because it is not in the album "%s"' % album_title)
+				# Common photo
+				elif options.update:
+					if options.upload and (timestamp > _entry_ts(picasa_photos[photo_title]) or options.force_update):
+						replace_photo(client, picasa_albums[album_title], picasa_photos[photo_title], filename, timestamp, options, ' %sbecause it is newer than the one in the album "%s"' % ('[FORCED] ' if options.force_update else '', album_title))
+					if options.download and (timestamp < _entry_ts(picasa_photos[photo_title]) or options.force_update):
+						download_photo(os.path.join(root, album_dir), picasa_photos[photo_title], options, ' %sbecause it is newer than the one in the album "%s"' % ('[FORCED] ' if options.force_update else '', album_title))
 
-			for photo_title, photo in picasa_photos.iteritems():
-				if options.upload and options.delete_photos and photo_title not in (p[0] for p in photos):
+			# Remote photos not in local
+			for photo_title, photo in ((t, p) for (t, p) in picasa_photos.iteritems() if t not in (p[0] for p in photos)):
+				if options.upload and options.delete_photos:
 					delete_photo(client, photo, options, ' because it does not exist in the local album')
+				if options.download:
+					download_photo(os.path.join(root, album_dir), photo, options, ' because it does not exist in the local album')
 
-	for album_title, album in picasa_albums.iteritems():
-		if options.upload and options.delete_albums and album_title not in (a[0] for a in disk_albums):
+	# Remote albums not in local
+	for album_title, album in ((t, a) for (t, a) in picasa_albums.iteritems() if t not in (a[0] for a in disk_albums)):
+		if options.upload and options.delete_albums:
 			delete_album(client, album, options, ' because it does not exist locally')
+		if options.download:
+			album_path = create_dir(root, album_title, _entry_ts(album), options, ' because it does not exist on the local albums')
+			picasa_photos = get_picasa_photos(client, album)
+			for photo_title, photo in picasa_photos.iteritems():
+				download_photo(album_path, photo, options, ' because it does not exist on the local album "%s"' % album_title)
 
 def run():
-	parser = argparse.ArgumentParser(description = 'Sync a directory with your Picasa Web account')
+	parser = argparse.ArgumentParser(description = 'Sync one or more directories with your Picasa Web account. If only one directory is given and it doesn\'t contain any supported file, it is assumed to be the parent of all the local albums.')
 	parser.add_argument('-n', '--dry-run', dest = 'dry_run', action = 'store_true', help = 'Do everything except creating or deleting albums and photos')
 	parser.add_argument('-D', '--debug', dest = 'debug', action = 'store_true', help = 'Debug Picasa API usage')
 	parser.add_argument('-v', '--verbose', dest = 'verbose', action = 'count', help = 'Verbose output (can be given more than once)')
@@ -185,10 +277,12 @@ def run():
 	parser.add_argument('-u', '--upload', dest = 'upload', action = 'store_true', help = 'Upload missing remote photos')
 	parser.add_argument('-d', '--download', dest = 'download', action = 'store_true', help = 'Download missing local photos')
 	parser.add_argument('-r', '--update', dest = 'update', action = 'store_true', help = 'Update changed local or remote photos')
-	parser.add_argument('--force-update', dest = 'force_update', action = 'store_true', help = '(DANGEROUS) Force updating photos regardless of modified status (Assumes --update)')
-	parser.add_argument('--delete-photos', dest = 'delete_photos', action = 'store_true', help = '(DANGEROUS) Delete remote or local photos not present on the other album')
-	parser.add_argument('--delete-albums', dest = 'delete_albums', action = 'store_true', help = '(VERY DANGEROUS) Delete remote or local albums not present on the other system')
-	parser.add_argument('path', metavar = 'PATH', help = 'Parent directory of the albums to sync')
+	group = parser.add_argument_group('DANGEROUS', 'Dangerous options that should be used with care')
+	group.add_argument('--force-update', dest = 'force_update', action = 'store_true', help = 'Force updating photos regardless of modified status (Assumes --update)')
+	group.add_argument('--delete-photos', dest = 'delete_photos', action = 'store_true', help = 'Delete remote or local photos not present on the other album')
+	group = parser.add_argument_group('VERY DANGEROUS', 'Very dangerous options that should be used with extreme care')
+	group.add_argument('--delete-albums', dest = 'delete_albums', action = 'store_true', help = 'Delete remote or local albums not present on the other system')
+	parser.add_argument('path', metavar = 'PATH', nargs = '+', help = 'Parent directory of the albums to sync')
 	options = parser.parse_args()
 
 	if options.verbose == 1:
@@ -220,6 +314,14 @@ def run():
 
 	if options.force_update and not options.update:
 		options.update = True
+
+	if len(options.path) > 1 and (options.download or options.delete_albums):
+		LOG.warn('You cannot download or delete albums when using more than one directories. Disabling download and/or album deletion.')
+		options.download = False
+		options.delete_albums = False
+
+	if len(options.path) == 1:
+		options.path = options.path[0]
 
 	sync(options, options.path)
 
