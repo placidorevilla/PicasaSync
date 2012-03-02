@@ -4,7 +4,7 @@ import sys
 if sys.hexversion < 0x020700F0:
 	raise SystemExit('This scripts needs at least Python 2.7')
 
-import logging, os, mimetypes, argparse, urllib
+import logging, os, mimetypes, argparse, urllib, multiprocessing, threading
 
 try:
 	import googlecl
@@ -332,11 +332,31 @@ class AlbumList(dict):
 		for album in self.itervalues():
 			album.sync()
 
+class ListParser:
+	def __init__(self, unique = True, type = str, separator = ',', choices = None):
+		self.type = type
+		self.separator = separator
+		self.choices = choices
+		self.unique = unique
+
+	def __call__(self, arg):
+		arglist = map(self.type, arg.split(self.separator))
+		if self.unique:
+			seen = set()
+			arglist = [a for a in arglist if a not in seen and not seen.add(a)]
+		if self.choices and any(a not in self.choices for a in arglist):
+			raise ValueError('Invalid value in list')
+		return arglist
+
+	def __repr__(self):
+		return 'list'
+
 class PicasaSync(object):
 	MAX_PHOTOS_PER_ALBUM = 1000
 	LOG = logging.getLogger('PicasaSync')
 
 	def __init__(self):
+		self.ncores = multiprocessing.cpu_count()
 		self.parse_cl_args()
 		self.get_picasa_client()
 
@@ -364,9 +384,13 @@ class PicasaSync(object):
 		parser.add_argument('-u', '--upload', dest = 'upload', action = 'store_true', help = 'Upload missing remote photos')
 		parser.add_argument('-d', '--download', dest = 'download', action = 'store_true', help = 'Download missing local photos')
 		parser.add_argument('-r', '--update', dest = 'update', action = 'store_true', help = 'Update changed local or remote photos')
+		parser.add_argument('-t', '--threads', dest = 'threads', type = int, nargs = '?', const = self.ncores, default = 1, help = 'Multithreaded operation. Set number of threads to use on album processing. If not given defaults to 1, if given without argument, defaults to number of CPU cores ({} in this system).'.format(self.ncores))
+		parser.add_argument('--timestamp', dest = 'timestamp', metavar = 'ORIGINS', type = ListParser(choices = ('filename', 'exif', 'stat')), default = ['stat'], help = 'Timestamp origin. ORIGINS is a comma separated list of values "filename", "exif" or "stat" which will be probed in order. Default is "stat".')
 		group = parser.add_argument_group('DANGEROUS', 'Dangerous options that should be used with care')
-		group.add_argument('--force-update', dest = 'force_update', action = 'store_true', help = 'Force updating photos regardless of modified status (Assumes --update)')
+		group.add_argument('--force-update', dest = 'force_update', choices = ('full', 'metadata'), nargs = '?', const = 'full', help = 'Force updating photos regardless of modified status (Assumes --update). If no argument given, it assumes full.')
 		group.add_argument('--delete-photos', dest = 'delete_photos', action = 'store_true', help = 'Delete remote or local photos not present on the other album')
+		group.add_argument('--strip-exif', dest = 'strip_exif', action = 'store_true', help = 'Strip EXIF data from your photos on upload.')
+		group.add_argument('--transform', dest = 'transform', metavar = 'TRANSFORMS', type = ListParser(choices = ('raw', 'rotate', 'resize')), help = 'Transform the local files before uploading them. TRANSFORMS is a list of transformations to apply, from "raw", "rotate" and "resize".')
 		group = parser.add_argument_group('VERY DANGEROUS', 'Very dangerous options that should be used with extreme care')
 		group.add_argument('--delete-albums', dest = 'delete_albums', action = 'store_true', help = 'Delete remote or local albums not present on the other system')
 		parser.add_argument('paths', metavar = 'PATH', nargs = '+', help = 'Parent directory of the albums to sync')
