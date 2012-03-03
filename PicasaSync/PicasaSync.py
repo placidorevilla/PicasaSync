@@ -120,7 +120,16 @@ class Photo(object):
 	@dryrun('self.cl_args.dry_run', LOG, 'Uploading file "{self.title}"{reason}')
 	def upload(self):
 		if self.isInPicasa():
-			self.deleteFromPicasa()
+			if self.cl_args.force_update and self.cl_args.force_update == 'metadata':
+				self.picasa.timestamp = gdata.photos.Timestamp(text = str(long(self.disk.timestamp) * 1000))
+				try:
+					self.client.UpdatePhotoMetadata(self.picasa)
+				except GooglePhotosException as e:
+					self.LOG.error('Error updating metadata for file "{}"'.format(self.title) + e)
+				finally:
+					return
+			else:
+				self.deleteFromPicasa()
 
 		metadata = gdata.photos.PhotoEntry()
 		metadata.title = atom.Title(text = self.title)
