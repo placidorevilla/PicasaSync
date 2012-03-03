@@ -4,7 +4,7 @@ import sys
 if sys.hexversion < 0x020700F0:
 	raise SystemExit('This scripts needs at least Python 2.7')
 
-import logging, os, mimetypes, argparse, urllib, multiprocessing, threading, calendar, re
+import logging, os, mimetypes, argparse, urllib, multiprocessing, threading, calendar, re, cStringIO
 
 try:
 	import googlecl
@@ -134,8 +134,18 @@ class Photo(object):
 		metadata = gdata.photos.PhotoEntry()
 		metadata.title = atom.Title(text = self.title)
 		metadata.timestamp = gdata.photos.Timestamp(text = str(long(self.disk.timestamp) * 1000))
+		if self.cl_args.strip_exif:
+			m = pyexiv2.ImageMetadata.from_buffer(file(self.path).read())
+			m.read()
+			for k in m.exif_keys + m.iptc_keys + m.xmp_keys:
+				del m[k]
+			del m.comment
+			m.write()
+			photo = cStringIO.StringIO(m.buffer)
+		else:
+			photo = self.path
 		try:
-			self.picasa = self.client.InsertPhoto(self.album.picasa, metadata, self.path, mimetypes.guess_type(self.path)[0])
+			self.picasa = self.client.InsertPhoto(self.album.picasa, metadata, photo, mimetypes.guess_type(self.path)[0])
 		except GooglePhotosException as e:
 			self.LOG.error('Error uploading file "{}"'.format(self.title) + e)
 
