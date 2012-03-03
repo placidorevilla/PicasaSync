@@ -4,7 +4,7 @@ import sys
 if sys.hexversion < 0x020700F0:
 	raise SystemExit('This scripts needs at least Python 2.7')
 
-import logging, os, mimetypes, argparse, urllib, multiprocessing, threading
+import logging, os, mimetypes, argparse, urllib, multiprocessing, threading, calendar, re
 
 try:
 	import googlecl
@@ -19,6 +19,16 @@ import atom
 import gdata.photos
 from gdata.photos.service import GooglePhotosException
 
+try:
+	import pyexiv2
+except ImportError:
+	raise SystemExit('Error importing the pyexiv2 module. In debian/ubuntu you can install it by doing "sudo apt-get install python-pyexiv2"')
+
+try:
+	import dateutil.parser
+except ImportError:
+	raise SystemExit('Error importing the dateutil module. In debian/ubuntu you can install it by doing "sudo apt-get install python-dateutil"')
+
 from dryrun import dryrun
 
 def _entry_ts(entry):
@@ -27,15 +37,36 @@ def _entry_ts(entry):
 class InvalidArguments(Exception): pass
 
 class PhotoDiskEntry(object):
-	def __init__(self, path, album_path = None):
+	def __init__(self, cl_args, path, album_path = None):
 		self.path = path
 		self.timestamp = None
-		try:
-			if album_path:
-				path = os.path.join(album_path, path)
-			self.timestamp = int(os.stat(path).st_mtime)
-		except:
-			pass
+		if album_path:
+			path = os.path.join(album_path, path)
+		if 'stat' not in cl_args.timestamp:
+			cl_args.timestamp.append('stat')
+		for origin in cl_args.timestamp:
+			if origin == 'stat':
+				try:
+					self.timestamp = int(os.stat(path).st_mtime)
+				except:
+					pass
+				else:
+					break
+			elif origin == 'exif':
+				metadata = pyexiv2.ImageMetadata(path)
+				metadata.read()
+				if 'Exif.Image.DateTime' in metadata:
+					self.timestamp = calendar.timegm(metadata['Exif.Image.DateTime'].value.timetuple())
+					break
+			else:
+				for m in re.finditer(r'\d', self.path):
+					try:
+						self.timestamp = calendar.timegm(dateutil.parser.parse(m.string[m.start():], fuzzy = True, dayfirst = True).timetuple())
+						break
+					except ValueError:
+						pass
+				if self.timestamp:
+					break
 
 class AlbumDiskEntry(object):
 	def __init__(self, path):
@@ -102,7 +133,7 @@ class Photo(object):
 	@dryrun('self.cl_args.dry_run', LOG, 'Downloading file "{self.title}"{reason}')
 	def download(self):
 		timestamp = _entry_ts(self.picasa)
-		self.disk = PhotoDiskEntry(self.title, self.album.disk.path)
+		self.disk = PhotoDiskEntry(self.cl_args, self.title, self.album.disk.path)
 		tmpfilename = self.path + '.part'
 		try:
 			urllib.urlretrieve(self.picasa.content.src, tmpfilename)
@@ -182,7 +213,7 @@ class Album(dict):
 			return
 
 		for f in files:
-			photo = Photo(self.client, self.cl_args, self, disk = PhotoDiskEntry(f, self.disk.path))
+			photo = Photo(self.client, self.cl_args, self, disk = PhotoDiskEntry(self.cl_args, f, self.disk.path))
 			if photo.title in self:
 				self[photo.title].combine(photo)
 			else:
