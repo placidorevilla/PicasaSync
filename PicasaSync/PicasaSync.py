@@ -29,6 +29,16 @@ try:
 except ImportError:
 	raise SystemExit('Error importing the dateutil module. In debian/ubuntu you can install it by doing "sudo apt-get install python-dateutil"')
 
+try:
+	import Image
+except ImportError:
+	raise SystemExit('Error importing the Image module. In debian/ubuntu you can install it by doing "sudo apt-get install python-imaging"')
+
+# .jpe is not a sane extension for jpeg
+mimetypes.init()
+if hasattr(mimetypes, '_db') and hasattr(mimetypes._db, 'types_map_inv') and mimetypes._db.types_map_inv[True].has_key('image/jpeg') and '.jpe' in mimetypes._db.types_map_inv[True]['image/jpeg']:
+	mimetypes._db.types_map_inv[True]['image/jpeg'].remove('.jpe')
+
 from dryrun import dryrun
 
 def _entry_ts(entry):
@@ -48,16 +58,18 @@ class PhotoDiskEntry(object):
 			if origin == 'stat':
 				try:
 					self.timestamp = int(os.stat(path).st_mtime)
-				except:
-					pass
-				else:
 					break
+				except Exception:
+					pass
 			elif origin == 'exif':
 				metadata = pyexiv2.ImageMetadata(path)
-				metadata.read()
-				if 'Exif.Image.DateTime' in metadata:
-					self.timestamp = calendar.timegm(metadata['Exif.Image.DateTime'].value.timetuple())
-					break
+				try:
+					metadata.read()
+					if 'Exif.Image.DateTime' in metadata:
+						self.timestamp = calendar.timegm(metadata['Exif.Image.DateTime'].value.timetuple())
+						break
+				except Exception:
+					pass
 			else:
 				for m in re.finditer(r'\d', self.path):
 					try:
@@ -74,21 +86,33 @@ class AlbumDiskEntry(object):
 		self.timestamp = None
 		try:
 			self.timestamp = int(os.stat(path).st_mtime)
-		except:
+		except Exception:
 			pass
 
 class Photo(object):
 	LOG = logging.getLogger('Photo')
+	max_size = (2048, 2048)
+	transforms = {
+			1 : (),
+			2 : (Image.FLIP_LEFT_RIGHT,),
+			3 : (Image.ROTATE_180,),
+			4 : (Image.FLIP_TOP_BOTTOM,),
+			5 : (Image.ROTATE_90, Image.FLIP_TOP_BOTTOM),
+			6 : (Image.ROTATE_270,),
+			7 : (Image.ROTATE_90, Image.FLIP_LEFT_RIGHT),
+			8 : (Image.ROTATE_90,)
+			}
 
-	def __init__(self, client, cl_args, album, title = None, disk = None, picasa = None):
+	def __init__(self, client, cl_args, album, title = None, disk = None, picasa = None, raw = False):
 		self.client = client
 		self.cl_args = cl_args
 		self.album = album
 		self.disk = disk
 		self.picasa = picasa
+		self.raw = raw
 		if not title:
 			if disk:
-				self.title = disk.path
+				self.title = os.path.splitext(disk.path)[0]
 			elif picasa:
 				self.title = picasa.title.text
 			else:
@@ -117,6 +141,9 @@ class Photo(object):
 	def isInPicasa(self):
 		return bool(self.picasa)
 
+	def isRaw(self):
+		return self.raw
+
 	@dryrun('self.cl_args.dry_run', LOG, 'Uploading file "{self.title}"{reason}')
 	def upload(self):
 		if self.isInPicasa():
@@ -125,7 +152,7 @@ class Photo(object):
 				try:
 					self.client.UpdatePhotoMetadata(self.picasa)
 				except GooglePhotosException as e:
-					self.LOG.error('Error updating metadata for file "{}"'.format(self.title) + e)
+					self.LOG.error('Error updating metadata for file "{}": '.format(self.title) + str(e))
 				finally:
 					return
 			else:
@@ -134,32 +161,88 @@ class Photo(object):
 		metadata = gdata.photos.PhotoEntry()
 		metadata.title = atom.Title(text = self.title)
 		metadata.timestamp = gdata.photos.Timestamp(text = str(long(self.disk.timestamp) * 1000))
-		if self.cl_args.strip_exif:
-			m = pyexiv2.ImageMetadata.from_buffer(file(self.path).read())
-			m.read()
-			for k in m.exif_keys + m.iptc_keys + m.xmp_keys:
-				del m[k]
-			del m.comment
-			m.write()
-			photo = cStringIO.StringIO(m.buffer)
-		else:
-			photo = self.path
-		try:
-			self.picasa = self.client.InsertPhoto(self.album.picasa, metadata, photo, mimetypes.guess_type(self.path)[0])
-		except GooglePhotosException as e:
-			self.LOG.error('Error uploading file "{}"'.format(self.title) + e)
+		mimetype = mimetypes.guess_type(self.path)[0]
+		transforms = self.cl_args.transform[:] if self.cl_args.transform else None
+		if transforms:
+			original = pyexiv2.ImageMetadata(self.path)
+			original.read()
 
-	@dryrun('self.cl_args.dry_run', LOG, 'Downloading file "{self.title}"{reason}')
+			if 'raw' in transforms and not self.isRaw():
+				transforms.remove('raw')
+			if 'resize' in transforms and not (original.dimensions[0] > self.max_size[0] or original.dimensions[1] > self.max_size[1]):
+				transforms.remove('resize')
+			if 'rotate' in transforms and ('Exif.Image.Orientation' not in original or original['Exif.Image.Orientation'].value == 1):
+				transforms.remove('rotate')
+
+			if 'raw' in transforms:
+				if len(original.previews) == 0:
+					self.LOG.error('Error getting valid preview from raw file "{}"'.format(self.disk.path))
+					return
+				try:
+					preview = next(x for x in original.previews if (x.dimensions[0] >= self.max_size[0] or x.dimensions[1] >= self.max_size[1]) and x.mime_type in AlbumList.standard_types)
+				except StopIteration:
+					preview = metadata.previews[-1]
+				mimetype = preview.mime_type
+				if mimetype not in AlbumList.standard_types:
+					self.LOG.error('Error getting valid preview from raw file "{}"'.format(self.disk.path))
+					return
+				photo = cStringIO.StringIO(preview.data)
+			else:
+				photo = cStringIO.StringIO(original.buffer)
+#			if 'resize' in transforms or 'rotate' in transforms and mimetype != 'image/jpeg':
+			if 'resize' in transforms or 'rotate' in transforms:
+				image = Image.open(photo)
+				if 'resize' in transforms:
+					image.thumbnail(self.max_size, Image.ANTIALIAS)
+				if 'rotate' in transforms:
+					for t in self.transforms.get(original['Exif.Image.Orientation'].value, ()):
+						image = image.transpose(t)
+					original['Exif.Image.Orientation'] = 1
+				photo = cStringIO.StringIO()
+				# TODO: save in the same format and size approx
+				image.save(photo, 'JPEG', quality = 95)
+				mimetype = 'image/jpeg'
+				photo.seek(0)
+#			if 'rotate' in transforms and 'resize' not in transforms and mimetype == 'image/jpeg':
+#				# TODO: lossless jpeg rotate
+#				pass
+			if not self.cl_args.strip_exif:
+				modified = pyexiv2.ImageMetadata.from_buffer(photo.getvalue())
+				modified.read()
+				original.copy(modified)
+				modified.write()
+				photo = cStringIO.StringIO(modified.buffer)
+		else:
+			if self.cl_args.strip_exif:
+				original = pyexiv2.ImageMetadata.from_buffer(file(self.path).read())
+				original.read()
+				for k in original.exif_keys + original.iptc_keys + original.xmp_keys:
+					del original[k]
+				del original.comment
+				original.write()
+				photo = cStringIO.StringIO(original.buffer)
+			else:
+				photo = self.path
+		try:
+			self.picasa = self.client.InsertPhoto(self.album.picasa, metadata, photo, mimetype)
+		except GooglePhotosException as e:
+			self.LOG.error('Error uploading file "{}": '.format(self.title) + str(e))
+
+	@dryrun('self.cl_args.dry_run', LOG, 'Downloading photo "{self.title}"{reason}')
 	def download(self):
 		timestamp = _entry_ts(self.picasa)
-		self.disk = PhotoDiskEntry(self.cl_args, self.title, self.album.disk.path)
+		if not self.disk:
+			self.disk = PhotoDiskEntry(self.cl_args, self.title + mimetypes.guess_extension(self.picasa.content.type), self.album.disk.path)
+		if mimetypes.guess_type(self.path)[0] in AlbumList.raw_types:
+			self.LOG.warn('Not overwriting RAW file "{}"'.format(self.path))
+			return
 		tmpfilename = self.path + '.part'
 		try:
 			urllib.urlretrieve(self.picasa.content.src, tmpfilename)
 			os.utime(tmpfilename, (timestamp, timestamp))
 			os.rename(tmpfilename, self.path)
 		except EnvironmentError as e:
-			self.LOG.error('Error downloading file "{}"'.format(self.title) + e)
+			self.LOG.error('Error downloading file "{}": '.format(self.title) + str(e))
 		else:
 			self.disk.timestamp = timestamp
 
@@ -177,7 +260,7 @@ class Photo(object):
 		try:
 			self.client.Delete(self.picasa)
 		except GooglePhotosException as e:
-			self.LOG.error('Error deleting photo "{}"'.format(self.title) + e)
+			self.LOG.error('Error deleting photo "{}": '.format(self.title) + str(e))
 		finally:
 			self.picasa = None
 
@@ -232,7 +315,8 @@ class Album(dict):
 			return
 
 		for f in files:
-			photo = Photo(self.client, self.cl_args, self, disk = PhotoDiskEntry(self.cl_args, f, self.disk.path))
+			raw = mimetypes.guess_type(f)[0] in AlbumList.raw_types
+			photo = Photo(self.client, self.cl_args, self, disk = PhotoDiskEntry(self.cl_args, f, self.disk.path), raw = raw)
 			if photo.title in self:
 				self[photo.title].combine(photo)
 			else:
@@ -263,7 +347,7 @@ class Album(dict):
 		try:
 			self.picasa = self.client.InsertAlbum(title = self.title, summary = None, access = access, timestamp = str(long(self.disk.timestamp) * 1000))
 		except GooglePhotosException as e:
-			self.LOG.error('Error creating album "{}"'.format(self.title) + e)
+			self.LOG.error('Error creating album "{}": '.format(self.title) + str(e))
 		else:
 			for photo in self.itervalues():
 				photo.upload()
@@ -302,7 +386,7 @@ class Album(dict):
 		try:
 			self.client.Delete(self.picasa)
 		except GooglePhotosException as e:
-			self.LOG.error('Error deleting album "{}"'.format(self.title) + e)
+			self.LOG.error('Error deleting album "{}": '.format(self.title) + str(e))
 		finally:
 			self.picasa = None
 	
@@ -327,11 +411,15 @@ class Album(dict):
 
 class AlbumList(dict):
 	LOG = logging.getLogger('AlbumList')
+	standard_types = set(['image/jpeg', 'image/x-ms-bmp', 'image/gif', 'image/png'])
+	raw_types = set(['image/x-nikon-nef'])
 
 	def __init__(self, client, cl_args):
 		self.client = client
 		self.cl_args = cl_args
-		self.supported_types = set(['image/jpeg', 'image/tiff', 'image/x-ms-bmp', 'image/gif', 'image/x-photoshop', 'image/png'])
+		self.supported_types = self.standard_types
+		if self.cl_args.transform and 'raw' in self.cl_args.transform:
+			self.supported_types = self.supported_types.union(self.raw_types)
 		self.filled_from_disk = False
 		self.filled_from_picasa = False
 
