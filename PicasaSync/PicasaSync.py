@@ -360,8 +360,23 @@ class AlbumList(dict):
 	def sync(self):
 		self.fillFromDisk()
 		self.fillFromPicasa()
-		for album in self.itervalues():
-			album.sync()
+		if self.cl_args.threads == 1:
+			for album in self.itervalues():
+				album.sync()
+		else:
+			threads = []
+			for album in self.itervalues():
+				if len(threads) == self.cl_args.threads:
+					for i in xrange(len(threads)):
+						threads[i].join(0.1)
+						if not threads[i].is_alive():
+							del threads[i]
+							break
+				nthread = threading.Thread(target = album.sync)
+				nthread.start()
+				threads.append(nthread)
+			for thread in threads:
+				thread.join()
 
 class ListParser:
 	def __init__(self, unique = True, type = str, separator = ',', choices = None):
