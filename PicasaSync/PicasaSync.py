@@ -440,7 +440,7 @@ class PicasaSync(object):
 		parser.add_argument('-d', '--download', dest = 'download', action = 'store_true', help = 'Download missing local photos')
 		parser.add_argument('-r', '--update', dest = 'update', action = 'store_true', help = 'Update changed local or remote photos')
 		parser.add_argument('-t', '--threads', dest = 'threads', type = int, nargs = '?', const = self.ncores, default = 1, help = 'Multithreaded operation. Set number of threads to use on album processing. If not given defaults to 1, if given without argument, defaults to number of CPU cores ({} in this system).'.format(self.ncores))
-		parser.add_argument('--timestamp', dest = 'timestamp', metavar = 'ORIGINS', type = ListParser(choices = ('filename', 'exif', 'stat')), default = ['stat'], help = 'Timestamp origin. ORIGINS is a comma separated list of values "filename", "exif" or "stat" which will be probed in order. Default is "stat".')
+		parser.add_argument('--timestamp', dest = 'timestamp', metavar = 'ORIGINS', type = ListParser(choices = ('filename', 'exif', 'stat')), default = ['exif', 'stat'], help = 'Timestamp origin. ORIGINS is a comma separated list of values "filename", "exif" or "stat" which will be probed in order. Default is "exif,stat".')
 		group = parser.add_argument_group('DANGEROUS', 'Dangerous options that should be used with care')
 		group.add_argument('--force-update', dest = 'force_update', choices = ('full', 'metadata'), nargs = '?', const = 'full', help = 'Force updating photos regardless of modified status (Assumes --update). If no argument given, it assumes full.')
 		group.add_argument('--delete-photos', dest = 'delete_photos', action = 'store_true', help = 'Delete remote or local photos not present on the other album')
