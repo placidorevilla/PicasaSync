@@ -495,6 +495,7 @@ class AlbumList(dict):
 				album = self[album_title]
 				album.client = self.clients[0]
 				album.sync()
+				del self[album_title]
 		else:
 			threads = []
 			clients = self.clients[:]
@@ -505,6 +506,7 @@ class AlbumList(dict):
 						threads[i][0].join(0.1)
 						if not threads[i][0].is_alive():
 							clients.append(threads[i][1].client)
+							del self[album_title]
 							del threads[i]
 							break
 				album.client = clients.pop()
@@ -611,7 +613,7 @@ class PicasaSync(object):
 		else:
 			log_level = logging.WARNING
 
-		logging.basicConfig(level = log_level, format = '%(asctime)s %(levelname)s [%(thread)s] %(name)s %(message)s')
+		logging.basicConfig(level = log_level, format = '%(asctime)s %(levelname)s [%(thread)x] %(name)s %(message)s')
 		sys.stdout = StreamLogger(sys.stdout, '[stdout] ')
 
 		if cl_args.max_photos > self.MAX_PHOTOS_PER_ALBUM:
