@@ -161,7 +161,7 @@ class Photo(object):
 			if self.album.cl_args.force_update and self.album.cl_args.force_update == 'metadata':
 				self.picasa.timestamp = gdata.photos.Timestamp(text = str(long(self.disk.timestamp) * 1000))
 				try:
-					self.album.client.UpdatePhotoMetadata(self.picasa)
+					self.picasa = self.album.client.UpdatePhotoMetadata(self.picasa)
 				except GooglePhotosException as e:
 					self.LOG.error(u'Error updating metadata for photo "{}": '.format(self.title) + str(e))
 				finally:
@@ -169,6 +169,7 @@ class Photo(object):
 			else:
 				metadata = self.picasa
 				metadata.timestamp = gdata.photos.Timestamp(text = str(long(self.disk.timestamp) * 1000))
+				metadata.title = atom.Title(text = self.title)
 		else:
 			metadata = gdata.photos.PhotoEntry()
 			metadata.title = atom.Title(text = self.title)
@@ -242,6 +243,7 @@ class Photo(object):
 				photo = self.path
 		try:
 			if self.isInPicasa():
+				metadata = self.album.client.UpdatePhotoMetadata(metadata)
 				self.picasa = self.album.client.UpdatePhotoBlob(metadata, photo, mimetype)
 			else:
 				self.picasa = self.album.client.InsertPhoto(self.album.picasa, metadata, photo, mimetype)
