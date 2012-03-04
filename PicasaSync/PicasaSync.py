@@ -48,6 +48,7 @@ class InvalidArguments(Exception): pass
 
 class PhotoDiskEntry(object):
 	def __init__(self, cl_args, path, album_path = None):
+		path = googlecl.safe_decode(path)
 		self.path = path
 		self.timestamp = None
 		if album_path:
@@ -62,7 +63,7 @@ class PhotoDiskEntry(object):
 				except Exception:
 					pass
 			elif origin == 'exif':
-				metadata = pyexiv2.ImageMetadata(googlecl.safe_decode(path))
+				metadata = pyexiv2.ImageMetadata(path)
 				try:
 					metadata.read()
 					if 'Exif.Image.DateTime' in metadata:
@@ -82,7 +83,7 @@ class PhotoDiskEntry(object):
 
 class AlbumDiskEntry(object):
 	def __init__(self, cl_args, path):
-		self.path = path
+		self.path = googlecl.safe_decode(path)
 		self.timestamp = None
 		if 'stat' not in cl_args.origin:
 			cl_args.origin.append('stat')
