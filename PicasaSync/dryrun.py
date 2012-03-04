@@ -53,12 +53,12 @@ class dryrun(object):
 			local.update(dict(zip(argspec.args, args)))
 			local.update(kwargs)
 			dry_run = eval(self.expr, self.f.func_globals, local)
-			message = dryrun.Formatter(argspec).vformat((self.prefix if dry_run else '') + self.message, args, kwargs)
+			message = dryrun.Formatter(argspec).vformat((self.prefix if dry_run else u'') + self.message, args, kwargs)
 			self.logger.log(self.levels[0] if not dry_run else self.levels[1], message)
 			if not dry_run:
 				return self.f(*args, **kwargs)
 
-	def __init__(self, expr, logger, message, prefix = '[DRYRUN] ', levels = (logging.INFO, logging.WARN)):
+	def __init__(self, expr, logger, message, prefix = u'[DRYRUN] ', levels = (logging.INFO, logging.WARN)):
 		self.expr = expr
 		self.logger = logger
 		self.prefix = prefix
