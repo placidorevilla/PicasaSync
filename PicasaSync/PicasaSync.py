@@ -178,8 +178,11 @@ class Photo(object):
 		transforms = self.album.cl_args.transform[:] if self.album.cl_args.transform else None
 		if transforms:
 			original = pyexiv2.ImageMetadata(googlecl.safe_decode(self.path))
-			# TODO: check errors
-			original.read()
+			try:
+				original.read()
+			except Exception as e:
+				self.LOG.error(u'Error reading file "{}": '.format(self.disk.path) + str(e))
+				return
 
 			if 'raw' in transforms and not self.isRaw():
 				transforms.remove('raw')
