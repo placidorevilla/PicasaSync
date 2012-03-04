@@ -345,6 +345,8 @@ class Album(dict):
 			return
 
 		for photo_entry in self.client.GetEntries('/data/feed/api/user/default/albumid/%s?kind=photo' % self.picasa.gphoto_id.text):
+			if mimetypes.guess_type(photo_entry.title.text)[0] in AlbumList.standard_types.union(AlbumList.raw_types):
+				photo_entry.title = atom.Title(text = os.path.splitext(photo_entry.title.text)[0])
 			photo = Photo(self, picasa = photo_entry)
 			if photo.title in self:
 				self[photo.title].combine(photo)
@@ -366,7 +368,8 @@ class Album(dict):
 		except GooglePhotosException as e:
 			self.LOG.error(u'Error creating album "{}": '.format(self.title) + str(e))
 		else:
-			for photo in self.itervalues():
+			for photo_title in sorted(self.iterkeys()):
+				photo = self[photo_title]
 				photo.upload()
 
 	@dryrun('self.cl_args.dry_run', LOG, u'Creating directory "{self.title}"{reason}')
@@ -383,12 +386,14 @@ class Album(dict):
 			self.disk.timestamp = timestamp
 
 		self.fillFromPicasa()
-		for photo in self.itervalues():
+		for photo_title in sorted(self.iterkeys()):
+			photo = self[photo_title]
 			photo.download()
 
 	@dryrun('self.cl_args.dry_run', LOG, u'Deleting directory "{self.disk.path}"{reason}')
 	def deleteFromDisk(self):
-		for photo in self.itervalues():
+		for photo_title in sorted(self.iterkeys()):
+			photo = self[photo_title]
 			photo.deleteFromDisk()
 
 		try:
@@ -423,7 +428,8 @@ class Album(dict):
 		else:
 			self.LOG.debug(u'Checking album "{}"...'.format(self.title))
 			self.fillFromPicasa()
-			for photo in self.itervalues():
+			for photo_title in sorted(self.iterkeys()):
+				photo = self[photo_title]
 				photo.sync()
 
 class AlbumList(dict):
@@ -485,13 +491,15 @@ class AlbumList(dict):
 		self.fillFromDisk()
 		self.fillFromPicasa()
 		if self.cl_args.threads == 1:
-			for album in self.itervalues():
+			for album_title in sorted(self.iterkeys()):
+				album = self[album_title]
 				album.client = self.clients[0]
 				album.sync()
 		else:
 			threads = []
 			clients = self.clients[:]
-			for album in self.itervalues():
+			for album_title in sorted(self.iterkeys()):
+				album = self[album_title]
 				if len(threads) == self.cl_args.threads:
 					for i in itertools.cycle(xrange(len(threads))):
 						threads[i][0].join(0.1)
